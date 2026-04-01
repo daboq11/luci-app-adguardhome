@@ -11,12 +11,13 @@ env:
   SUBTARGET: mt7981
   PKG_NAME: luci-app-adguardhome
   OPENWRT_VER: 24.10
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout plugin
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           repository: sirpdboy/luci-app-adguardhome
@@ -30,12 +31,12 @@ jobs:
       - name: Download OpenWrt SDK
         run: |
           BASE="https://downloads.openwrt.org/releases/${OPENWRT_VER}/targets/${TARGET}/${SUBTARGET}/"
-          FILE=$(curl -s "$BASE" | grep -oP 'openwrt-sdk-[^"]+\.tar\.zst' | head -1)
+          FILE=$(curl -s "$BASE" | grep -oP 'openwrt-sdk-[^"]+\.tar\.zst' | head -n 1)
           URL="$BASE$FILE"
           mkdir -p _sdk
           wget -q "$URL" -O _sdk/sdk.tar.zst
           tar --zstd -xf _sdk/sdk.tar.zst -C _sdk
-          SDK=$(find _sdk -type d -name 'openwrt-sdk-*' | head -1)
+          SDK=$(find _sdk -type d -name 'openwrt-sdk-*' | head -n 1)
           echo "SDK_DIR=$SDK" >> $GITHUB_ENV
 
       - name: Build package
@@ -43,10 +44,8 @@ jobs:
           cd "$SDK_DIR"
           mkdir -p package/$PKG_NAME
           cp -r $GITHUB_WORKSPACE/* package/$PKG_NAME/
-
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-
           make defconfig
           make package/$PKG_NAME/clean V=s
           make package/$PKG_NAME/compile V=s -j1
