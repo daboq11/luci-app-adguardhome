@@ -1,4 +1,4 @@
-name: Build luci-app-adguardhome mt7981 24.10
+name: Build luci-app-adguardhome mt7981
 
 on:
   workflow_dispatch
@@ -24,11 +24,11 @@ jobs:
         run: |
           TARGET=mediatek
           SUBTARGET=mt7981
-          VER=23.05.7
+          VER=23.05.4
           BASE="https://downloads.openwrt.org/releases/$VER/targets/$TARGET/$SUBTARGET/"
           FILE=$(curl -s "$BASE" | grep -oP 'openwrt-sdk-[^"]+\.tar\.zst' | head -n1)
           URL="$BASE$FILE"
-          echo "下载地址：$URL"
+          echo "SDK URL: $URL"
           mkdir -p _sdk
           wget -v "$URL" -O _sdk/sdk.tar.zst
           tar --zstd -xf _sdk/sdk.tar.zst -C _sdk
@@ -55,5 +55,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: luci-app-adguardhome-mt7981-24.10
+          name: luci-app-adguardhome-mt7981
           path: ipk/*.ipk
