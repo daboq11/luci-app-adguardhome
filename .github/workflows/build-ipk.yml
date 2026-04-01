@@ -39,7 +39,8 @@ jobs:
         run: |
           cd "$SDK_DIR"
           mkdir -p package/luci-app-adguardhome
-          cp -r "$GITHUB_WORKSPACE"/* package/luci-app-adguardhome/
+          # 👇 这一行是修复关键，排除 _sdk，不会循环复制
+          rsync -a --exclude='_sdk' "$GITHUB_WORKSPACE"/ package/luci-app-adguardhome/
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           make defconfig
