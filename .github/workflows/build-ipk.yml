@@ -1,4 +1,4 @@
-name: Build & Release luci-app-adguardhome (filogic/mt7981)
+name: Build & Release luci-app-adguardhome & guest-wifi (filogic/mt7981)
 
 on:
   workflow_dispatch:
@@ -13,11 +13,18 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout plugin
+      - name: Checkout plugin adguardhome
         uses: actions/checkout@v4
         with:
           repository: sirpdboy/luci-app-adguardhome
           path: app
+
+      # 👇 新增：拉取 guest-wifi 插件源码
+      - name: Checkout plugin guest-wifi
+        uses: actions/checkout@v4
+        with:
+          repository: kenzok8/small-package
+          path: small-package
 
       - name: Install dependencies
         run: |
@@ -37,23 +44,35 @@ jobs:
           SDK_DIR=$(find sdk -type d -name 'openwrt-sdk-*' | head -n1)
           echo "SDK_DIR=$SDK_DIR" >> $GITHUB_ENV
 
-      - name: Build package
+      - name: Build packages
         run: |
           cd "$SDK_DIR"
+          
+          # ========== 1. 编译 adguardhome (你原来的路径，完全不变) ==========
           mkdir -p package/luci-app-adguardhome
-          # ✅ 修复关键：这个插件源码在第二层目录，必须拷这个
           cp -r "$GITHUB_WORKSPACE"/app/luci-app-adguardhome/* package/luci-app-adguardhome/
+          
+          # ========== 2. 新增：编译 guest-wifi (正确路径) ==========
+          mkdir -p package/luci-app-guest-wifi
+          cp -r "$GITHUB_WORKSPACE"/small-package/luci-app-guest-wifi/* package/luci-app-guest-wifi/
 
+          # 统一编译依赖
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           make defconfig
+          
+          # 编译两个插件
           make package/luci-app-adguardhome/clean V=s
           make package/luci-app-adguardhome/compile V=s -j1
+          
+          make package/luci-app-guest-wifi/clean V=s
+          make package/luci-app-guest-wifi/compile V=s -j1
 
       - name: Collect ipk
         run: |
           mkdir -p ipk
           find "$SDK_DIR"/bin/packages/ -name '*adguardhome*.ipk' -exec cp {} ipk/ \;
+          find "$SDK_DIR"/bin/packages/ -name '*guest-wifi*.ipk' -exec cp {} ipk/ \;
           ls ipk/
 
       - name: Upload to Release
@@ -62,8 +81,10 @@ jobs:
           tag_name: build-${{ github.run_number }}
           name: OpenWrt 24.10.1 filogic (mt7981) Build ${{ github.run_number }}
           body: |
-            自动构建：luci-app-adguardhome for OpenWrt 24.10.1 (mt7981/filogic)
-            源码：https://github.com/sirpdboy/luci-app-adguardhome
+            自动构建：
+            ✅ luci-app-adguardhome
+            ✅ luci-app-guest-wifi
+            适用平台：mt7981/filogic | OpenWrt 24.10.1
           files: ipk/*.ipk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
