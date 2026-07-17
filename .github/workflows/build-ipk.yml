@@ -1,73 +1,64 @@
-name: 构建与发布 luci-app-adguardhome （filogic/mt7981）
-
-on:
-  workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
-
+name: Build luci-app-adguardhome IPK (filogic mt7981 24.10.1)
 permissions:
   contents: write
   packages: write
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch: # 支持手动触发
+
+env:
+  OPENWRT_VER: "24.10.1"
+  TARGET_BOARD: "mediatek/filogic"
+  PLUGIN_REPO: "kenzok78/luci-app-adguardhome"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      # 拉取当前仓库完整源码
-      - name: Checkout plugin source
+      # 1. 拉取 kenzok78/luci-app-adguardhome 插件源码到 plugin-src
+      - name: Checkout plugin source kenzok78/luci-app-adguardhome
         uses: actions/checkout@v4
         with:
+          repository: ${{ env.PLUGIN_REPO }}
           path: plugin-src
+          fetch-depth: 1
 
-      # 安装编译依赖
+      # 2. 安装编译依赖
       - name: Install build dependencies
         run: |
           sudo apt update -y
-          sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3 rsync unzip zlib1g-dev file wget zstd jq
+          sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3 rsync unzip zlib1g-dev file wget zstd jq ccache
 
-      # 下载 OpenWrt 24.10.1 filogic SDK
-      - name: Download OpenWrt SDK mediatek/filogic 24.10.1
+      # 3. 下载对应 filogic SDK
+      - name: Download OpenWrt SDK (mediatek/filogic mt7981)
         run: |
-          VER=24.10.1
+          VER=${{ env.OPENWRT_VER }}
           TARGET=mediatek
           SUBTARGET=filogic
-          BASE="https://downloads.openwrt.org/releases/$VER/targets/$TARGET/$SUBTARGET/"
-          FILE=$(curl -s "$BASE" | grep -oP 'openwrt-sdk-[^"]+\.tar\.zst' | head -n1)
+          FILE="openwrt-sdk-${VER}-${TARGET}-${SUBTARGET}_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+          BASE="https://downloads.openwrt.org/releases/${VER}/targets/${TARGET}/${SUBTARGET}/"
           mkdir -p sdk
           wget -q "$BASE$FILE" -O sdk.tar.zst
           tar --zstd -xf sdk.tar.zst -C sdk
           SDK_DIR=$(find sdk -maxdepth 1 -type d -name 'openwrt-sdk-*' | head -n1)
           echo "SDK_DIR=$SDK_DIR" >> $GITHUB_ENV
+          echo "SDK Path: $SDK_DIR"
 
-      # 复刻 README git clone 逻辑：完整拷贝仓库文件到 package/luci-app-adguardhome
-      - name: Copy source & fix duplicate BuildPackage entry
+      # 4. 将插件源码拷贝进SDK package目录
+      - name: Copy plugin source to SDK package dir
         run: |
           cd "${{ env.SDK_DIR }}"
+          rm -rf package/luci-app-adguardhome
           mkdir -p package/luci-app-adguardhome
-          # 正确拷贝写法，等同于 git clone 效果，不漏任何文件（含Makefile）
-          cp -r "$GITHUB_WORKSPACE/plugin-src/." package/luci-app-adguardhome/
-
-          # 打印目录用于排错
-          echo "==== package/luci-app-adguardhome 目录文件 ===="
+          # plugin-src 是插件仓库根目录，直接完整复制
+          cp -r $GITHUB_WORKSPACE/plugin-src/* package/luci-app-adguardhome/
           ls -la package/luci-app-adguardhome/
 
-          # 强制校验Makefile存在，不存在直接终止流程
-          if [ ! -f package/luci-app-adguardhome/Makefile ]; then
-            echo "错误：未复制到插件Makefile，源码拷贝失败！"
-            exit 1
-          fi
-
-          cd package/luci-app-adguardhome
-          echo "===== 修复前 Makefile 尾部 ====="
-          tail -10 Makefile
-          # 删除多余BuildPackage，解决menuconfig双选项（适配24.10/25.12）
-          sed -i '/call BuildPackage - OpenWrt buildroot signature/d' Makefile
-          sed -i '/$(eval \$(call BuildPackage,luci-app-adguardhome))/d' Makefile
-          echo -e "\n===== 修复后 Makefile 尾部 ====="
-          tail -10 Makefile
-
-      # 更新 feeds、生成默认配置
+      # 5. 更新 feeds 并生成配置
       - name: Update feeds & make defconfig
         run: |
           cd "${{ env.SDK_DIR }}"
@@ -75,36 +66,36 @@ jobs:
           ./scripts/feeds install -a
           make defconfig
 
-      # 清理并单线程编译，避免Action内存溢出
+      # 6. 清理旧编译产物，单线程编译防内存溢出
       - name: Compile luci-app-adguardhome
         run: |
           cd "${{ env.SDK_DIR }}"
           make package/luci-app-adguardhome/clean V=s
           make package/luci-app-adguardhome/compile V=s -j1
 
-      # 收集编译产出IPK
-      - name: Collect compiled IPK packages
+      # 7. 收集所有 adguardhome 相关ipk
+      - name: Collect compiled IPK
         run: |
-          mkdir -p output-ipk
-          find "${{ env.SDK_DIR }}/bin/packages/" -type f -name "*adguardhome*.ipk" -exec cp {} output-ipk/ \;
-          echo "==== 已生成IPK列表 ===="
-          ls -lh output-ipk/
+          mkdir -p out-ipk
+          find "${{ env.SDK_DIR }}/bin/packages/" -name "*adguardhome*.ipk" -exec cp {} out-ipk/ \;
+          echo "=== Compiled IPK List ==="
+          ls -lh out-ipk/
 
-      # 自动创建Release上传安装包
-      - name: Create Release & Upload IPK
+      # 8. 自动创建Release上传IPK包
+      - name: Release upload compiled IPK
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: OpenWrt 24.10.1 filogic(mt7981) Build #${{ github.run_number }}
+          name: OpenWrt ${{ env.OPENWRT_VER }} filogic(mt7981) Build #${{ github.run_number }}
           body: |
             ## 编译信息
-            插件仓库：https://github.com/kenzok78/luci-app-adguardhome
-            SDK：OpenWrt 24.10.1 mediatek/filogic
-            适配设备：mt7981/mt7983/mt7988 全系filogic路由
-            兼容固件：OpenWrt 24.10 / ImmortalWrt 24.10 & 25.12
-            处理优化：自动移除重复BuildPackage定义，消除menuconfig双选项BUG
-            编译方式：完全匹配仓库README git clone 直接编译逻辑
-          files: output-ipk/*.ipk
+            - 插件仓库：https://github.com/${{ env.PLUGIN_REPO }}
+            - OpenWrt 版本：${{ env.OPENWRT_VER }}
+            - 平台架构：mediatek/filogic (mt7981/mt7983/mt7988)
+            - 编译方式：官方SDK独立编译 luci-app-adguardhome
+            ## 内置
+            ✅ luci-app-adguardhome 完整IPK安装包
+          files: out-ipk/*.ipk
           draft: false
           prerelease: false
         env:
