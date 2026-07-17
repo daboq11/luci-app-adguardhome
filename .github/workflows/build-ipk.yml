@@ -1,11 +1,13 @@
 name: Build & Release luci-app-adguardhome (filogic/mt7981)
 
+# 触发方式：手动运行 / 推送 v* 标签自动构建
 on:
   workflow_dispatch:
   push:
     tags:
       - 'v*'
 
+# 权限：允许创建Release、上传文件
 permissions:
   contents: write
   packages: write
@@ -14,20 +16,20 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      # 拉取当前仓库 kenzok78/luci-app-adguardhome 完整源码
+      # 1. 拉取当前仓库源码（kenzok78/luci-app-adguardhome）
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           path: plugin-src
 
-      # 安装编译依赖
+      # 2. 安装编译全套依赖
       - name: Install build dependencies
         run: |
           sudo apt update -y
           sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3 rsync unzip zlib1g-dev file wget zstd jq
 
-      # 下载 OpenWrt 24.10.1 filogic SDK
-      - name: Download OpenWrt SDK (mediatek/filogic mt7981)
+      # 3. 下载 OpenWrt 24.10.1 filogic SDK
+      - name: Download OpenWrt SDK mediatek/filogic
         run: |
           VER=24.10.1
           TARGET=mediatek
@@ -40,53 +42,59 @@ jobs:
           SDK_DIR=$(find sdk -maxdepth 1 -type d -name 'openwrt-sdk-*' | head -n1)
           echo "SDK_DIR=$SDK_DIR" >> $GITHUB_ENV
 
-      # 关键适配：仓库根目录直接复制到 package/luci-app-adguardhome
-      # 匹配官方README git clone 直接丢package目录的结构
-      - name: Copy plugin to SDK package dir
+      # 4. 复制插件到SDK，自动修复Makefile重复BuildPackage（解决双菜单）
+      - name: Copy plugin source & fix duplicate BuildPackage
         run: |
           cd "${{ env.SDK_DIR }}"
           mkdir -p package/luci-app-adguardhome
-          # plugin-src 是仓库根目录，直接全部复制，无嵌套文件夹
           cp -r $GITHUB_WORKSPACE/plugin-src/* package/luci-app-adguardhome/
-          ls package/luci-app-adguardhome/
+          cd package/luci-app-adguardhome
 
-      # 更新 feeds、加载依赖、生成配置
-      - name: Update feeds & defconfig
+          echo "================= 修复前 Makefile 末尾 ==================="
+          tail -10 Makefile
+          # 删除冗余注释行与重复BuildPackage代码
+          sed -i '/call BuildPackage - OpenWrt buildroot signature/d' Makefile
+          sed -i '/$(eval \$(call BuildPackage,luci-app-adguardhome))/d' Makefile
+          echo -e "\n================= 修复后 Makefile 末尾 ==================="
+          tail -10 Makefile
+
+      # 5. 更新feeds并生成默认配置
+      - name: Update feeds & make defconfig
         run: |
           cd "${{ env.SDK_DIR }}"
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           make defconfig
 
-      # 清理并单线程编译，避免actions内存溢出
+      # 6. 清理并单线程编译，防止Actions内存溢出
       - name: Compile luci-app-adguardhome
         run: |
           cd "${{ env.SDK_DIR }}"
           make package/luci-app-adguardhome/clean V=s
           make package/luci-app-adguardhome/compile V=s -j1
 
-      # 收集输出ipk安装包
+      # 7. 收集编译生成的ipk安装包
       - name: Collect compiled IPK
         run: |
-          mkdir -p out-ipk
-          find "${{ env.SDK_DIR }}/bin/packages/" -name "*adguardhome*.ipk" -exec cp {} out-ipk/ \;
-          echo "Compiled IPK list:"
-          ls -lh out-ipk/
+          mkdir -p output-ipk
+          find "${{ env.SDK_DIR }}/bin/packages/" -name "*adguardhome*.ipk" -exec cp {} output-ipk/ \;
+          echo "打包完成，IPK列表："
+          ls -lh output-ipk/
 
-      # 自动发布Release上传安装包
-      - name: Release upload IPK
+      # 8. 自动创建Release并上传ipk文件
+      - name: Create GitHub Release & Upload IPK
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: OpenWrt 24.10.1 filogic(mt7981) Build #${{ github.run_number }}
           body: |
-            ### 编译说明
-            插件来源：https://github.com/kenzok78/luci-app-adguardhome
-            OpenWrt版本：24.10.1
-            平台：mediatek/filogic (mt7981/mt7983/mt7988)
-            编译方式：SDK独立编译 luci-app-adguardhome
-            仓库目录结构适配原版README编译规范
-          files: out-ipk/*.ipk
+            ### 编译信息
+            - 插件仓库：https://github.com/kenzok78/luci-app-adguardhome
+            - SDK版本：OpenWrt 24.10.1
+            - 平台：mediatek/filogic (mt7981/mt7983/mt7988)
+            - 兼容系统：OpenWrt 24.10 / ImmortalWrt 24.10 & 25.12
+            - 修复内容：自动移除重复BuildPackage，解决menuconfig双选项问题
+          files: output-ipk/*.ipk
           draft: false
           prerelease: false
         env:
