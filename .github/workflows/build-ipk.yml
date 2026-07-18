@@ -20,11 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         arch:
-          - x86_64
           - aarch64_cortex-a53
-          - armv7_cortex-a9
-          - armvirt_64
-
     steps:
       - name: 1. 检出当前仓库源码（自带prepare.sh/patches）
         uses: actions/checkout@v4
